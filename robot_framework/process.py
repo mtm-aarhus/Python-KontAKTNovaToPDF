@@ -73,22 +73,25 @@ def process(
     _callback(orchestrator_connection, client, case_id, doc_id, {"status": "converting"})
 
     try:
-        result = _convert_and_upload(
-            orchestrator_connection, client, case_id, source_case_id, dok_id, akt_id, title, case_title,
+        result = _convert_and_store(
+            orchestrator_connection, client, case_id, doc_id, source_case_id, dok_id, akt_id, title,
         )
     except Exception as exc:
         orchestrator_connection.log_info(f"NovaToPDF failed: {exc!r}")
         _callback(orchestrator_connection, client, case_id, doc_id, {"status": "error", "note": str(exc)[:500]})
         raise
 
-    _callback(orchestrator_connection, client, case_id, doc_id, result)
+    # On success the /store endpoint already recorded status + metadata; only an
+    # error needs reporting back via the /file status callback.
+    if result.get("status") == "error":
+        _callback(orchestrator_connection, client, case_id, doc_id, result)
     orchestrator_connection.log_info(f"NovaToPDF done doc={doc_id}: {result.get('status')}")
 
 
 # ----- Conversion + upload ---------------------------------------------------
 
 
-def _convert_and_upload(orchestrator_connection, client, case_id, source_case_id, dok_id, akt_id, title, case_title):
+def _convert_and_store(orchestrator_connection, client, case_id, doc_id, source_case_id, dok_id, akt_id, title):
     nova_url = client.nova_url
     token = client.token
 
@@ -125,49 +128,25 @@ def _convert_and_upload(orchestrator_connection, client, case_id, source_case_id
                     cnote or "Kunne ikke konverteres til PDF — original uploadet (bliver ikke OCR-screenet)."
                 )
 
-        result = _upload_final(
-            orchestrator_connection, client, case_id, source_case_id, akt_id, dok_id, title,
-            case_title, upload_path, upload_ext,
+        akt = akt_id if akt_id is not None else 0
+        filename = sp.build_filename(akt, dok_id, sp.sanitize_title(title), upload_ext)
+        _store_file(client, case_id, doc_id, upload_path, filename,
+                    "pdf" if status == "ready" else "original", note)
+        return {"status": status}
+
+
+def _store_file(client, case_id, doc_id, local_path, filename, kind, note=""):
+    """POST the produced file's bytes into KontAKT's local store (replaces the
+    SharePoint upload). The /store endpoint records name/size/hash/status, so no
+    separate metadata callback is needed. ``kind`` is 'pdf' or 'original'."""
+    with open(local_path, "rb") as fh:
+        r = requests.post(
+            f"{client.kontakt_base}/api/v1/cases/{case_id}/documents/{doc_id}/store",
+            params={"filename": filename, "kind": kind, "note": note or ""},
+            headers={"X-API-Key": client.kontakt_key, "Content-Type": "application/octet-stream"},
+            data=fh, timeout=600,
         )
-        result["status"] = status
-        if note:
-            result["note"] = note
-        return result
-
-
-def _upload_final(orchestrator_connection, client, case_id, source_case_id, akt_id, dok_id,
-                  title, case_title, upload_path, upload_ext):
-    """Upload ``upload_path`` (a PDF or an unconvertible original) into the case's
-    SharePoint folder and return the callback payload (sans status)."""
-    ctx, site_url = client.sp_ctx, client.sp_site_url
-    overmappe = sp.sanitize_segment(f"{case_id} - {case_title}")[:120].strip() or str(case_id)
-    undermappe = sp.sanitize_segment(source_case_id)[:80].strip() or "ukendt-sag"
-
-    base_path = sp.site_root_path(site_url) + "/" + LIBRARY + "/"
-    akt = akt_id if akt_id is not None else 0
-    safe_title = sp.sanitize_title(title)
-    safe_title = sp.truncate_title(
-        safe_title, base_path=base_path, overmappe=overmappe, undermappe=undermappe,
-        akt_id=akt, dok_id=dok_id,
-    )
-    filename = sp.build_filename(akt, dok_id, safe_title, upload_ext)
-
-    final = upload_path.parent / filename
-    if upload_path != final:
-        upload_path.replace(final)
-
-    sha = oomtm_pdf.sha256_file(final)
-    size = final.stat().st_size
-    file_path = sp.upload_to_case_folder(
-        ctx, site_url=site_url, library=LIBRARY,
-        overmappe=overmappe, undermappe=undermappe, local_file=str(final),
-    )
-    return {
-        "sharepoint_url": sp.file_browser_url(site_url, file_path),
-        "file_name": filename,
-        "file_size_bytes": size,
-        "sha256": sha.hex(),
-    }
+    r.raise_for_status()
 
 
 # ----- KontAKT callback ------------------------------------------------------
