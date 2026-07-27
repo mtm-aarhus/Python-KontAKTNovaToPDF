@@ -30,8 +30,7 @@ OO config:
     Constant   KMDTokenTimestamp
     Credential KMDClientSecret
     Credential KMDAccessToken        — username = token URL, password = cached token
-    Constant   KontAKTSharePoint
-    Credential SharePointCert / SharePointAPI / KontAKTAPI   (as in GOToPDF)
+    Credential KontAKTAPI            — username = base URL, password = X-API-Key
 """
 from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
 from OpenOrchestrator.database.queues import QueueElement
