@@ -1,18 +1,18 @@
-"""KontAKT Nova → PDF → SharePoint robot.
+"""KontAKT Nova → PDF robot.
 
 Queue-driven, one queue element per document. Nova has no built-in PDF
 converter, so for a single Nova document it:
   1. looks up the document (documentUuid + file extension) by document number,
   2. downloads the original file,
   3. converts it to PDF via oomtm.pdf (LibreOffice / Pillow / email-render),
-  4. uploads the PDF to the KontAKT SharePoint site (one file per document),
-  5. reports status + the SharePoint URL back to KontAKT.
+  4. POSTs the PDF bytes into KontAKT's local file store (POST .../store);
+     files that can't be converted are stored as their original instead.
 
 Videos / audio / unconvertible binaries are skipped (status='skipped').
 
-The Nova token, SharePoint context and cached credentials live on the ``Client``
-opened in ``reset.open_all`` and are reused across every queue element (the
-framework reconnects via ``reset.reset`` on a retry).
+The Nova token and cached credentials live on the ``Client`` opened in
+``reset.open_all`` and are reused across every queue element (the framework
+reconnects via ``reset.reset`` on a retry).
 
 Queue payload (set by KontAKT's "Hent filer" trigger):
     {
@@ -43,9 +43,7 @@ import requests
 from robot_framework import reset
 from oomtm import nova as oomtm_nova
 from oomtm import pdf as oomtm_pdf
-from oomtm import sharepoint as sp
-
-LIBRARY = "Delte dokumenter"
+from oomtm import sharepoint as sp  # filename helpers only (build_filename, sanitize_title)
 
 
 def process(
@@ -136,7 +134,7 @@ def _convert_and_store(orchestrator_connection, client, case_id, doc_id, source_
 
 def _store_file(client, case_id, doc_id, local_path, filename, kind, note=""):
     """POST the produced file's bytes into KontAKT's local store (replaces the
-    SharePoint upload). The /store endpoint records name/size/hash/status, so no
+    conversion). The /store endpoint records name/size/hash/status, so no
     separate metadata callback is needed. ``kind`` is 'pdf' or 'original'."""
     with open(local_path, "rb") as fh:
         r = requests.post(
