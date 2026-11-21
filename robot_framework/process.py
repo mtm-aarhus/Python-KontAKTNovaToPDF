@@ -4,11 +4,15 @@ Queue-driven, one queue element per document. Nova has no built-in PDF
 converter, so for a single Nova document it:
   1. looks up the document (documentUuid + file extension) by document number,
   2. downloads the original file,
-  3. converts it to PDF via oomtm.pdf (LibreOffice / Pillow / email-render),
+  3. converts it to PDF with ``oomtm.convert``, the same way every KontAKT PDF
+     robot does (WeasyPrint for mails/HTML/text/CSV, LibreOffice for Office,
+     Pillow for images),
   4. POSTs the PDF bytes into KontAKT's local file store (POST .../store);
-     files that can't be converted are stored as their original instead.
+     files that can't be converted are stored as their original instead, with
+     oomtm's reason as the note.
 
-Videos / audio / unconvertible binaries are skipped (status='skipped').
+A mail's attachments are their own documents in Nova, so a mail's PDF is just
+the mail - nothing to tell the caseworker about.
 
 The Nova token and cached credentials live on the ``Client`` opened in
 ``reset.open_all`` and are reused across every queue element (the framework
@@ -43,7 +47,7 @@ import requests
 from robot_framework import reset
 from robot_framework.exceptions import CaseDeleted
 from oomtm import nova as oomtm_nova
-from oomtm import pdf as oomtm_pdf
+from oomtm import convert
 from oomtm import sharepoint as sp  # filename helpers only (build_filename, sanitize_title)
 
 
@@ -109,6 +113,8 @@ def process(
 
 # ----- Conversion + upload ---------------------------------------------------
 
+ORIGINAL_NOTE = "Filen udleveres, som den er, og bliver ikke screenet."
+
 
 def _convert_and_store(orchestrator_connection, client, case_id, doc_id, source_case_id, dok_id, akt_id, title):
     nova_url = client.nova_url
@@ -129,23 +135,14 @@ def _convert_and_store(orchestrator_connection, client, case_id, doc_id, source_
         src = work / f"{dok_id}.{ext or 'bin'}"
         oomtm_nova.download_file(token=token, base_url=nova_url, document_uuid=document_uuid, local_path=str(src))
 
-        if ext == "pdf":
-            upload_path, upload_ext, status, note = src, "pdf", "ready", ""
-        elif oomtm_pdf.classify(ext) == "skip":
-            upload_path, upload_ext, status, note = src, (ext or "bin"), "uploaded_original", (
-                f"Filtypen .{ext} kan ikke konverteres til PDF — uploadet som original "
-                "(bliver ikke OCR-screenet)."
-            )
+        r = convert.convert(src, work / "pdf", name=f"dokument.{ext}" if ext else src.name,
+                            log=orchestrator_connection.log_info)
+        if r.ok:
+            # Advarslerne (sporede ændringer, skjulte ark) følger med PDF'en.
+            upload_path, upload_ext, status, note = r.pdf, "pdf", "ready", " ".join(r.warnings)
         else:
-            pdf_path, cstatus, cnote = oomtm_pdf.convert_to_pdf(
-                src, ext, work, auto_install=True, log=orchestrator_connection.log_info,
-            )
-            if cstatus == "ready" and pdf_path is not None:
-                upload_path, upload_ext, status, note = pdf_path, "pdf", "ready", ""
-            else:
-                upload_path, upload_ext, status, note = src, (ext or "bin"), "uploaded_original", (
-                    cnote or "Kunne ikke konverteres til PDF — original uploadet (bliver ikke OCR-screenet)."
-                )
+            upload_path, upload_ext, status, note = src, (ext or "bin"), "uploaded_original", (
+                f"{r.note} {ORIGINAL_NOTE}")
 
         akt = akt_id if akt_id is not None else 0
         filename = sp.build_filename(akt, dok_id, sp.sanitize_title(title), upload_ext)

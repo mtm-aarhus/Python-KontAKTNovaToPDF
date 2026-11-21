@@ -10,10 +10,10 @@ For one Nova document:
 
 1. Looks up the document (its `documentUuid` and file extension) by document number.
 2. Downloads the original file.
-3. Converts it to PDF via the shared [`oomtm`](https://github.com/mtm-aarhus/oomtm) library (LibreOffice / Pillow for images / e-mail rendering). Nova has no built-in converter, so all conversion happens here.
+3. Converts it to PDF with the shared [`oomtm`](https://github.com/mtm-aarhus/oomtm) library (`oomtm.convert`), the same way every KontAKT PDF robot does: WeasyPrint for e-mails, HTML, text and CSV, LibreOffice for Office files, Pillow for images.
 4. POSTs the PDF bytes into KontAKT's local file store (`POST /api/v1/cases/{id}/documents/{doc_id}/store`) — one call does the upload and records name/size/SHA-256/status.
 
-Files that can't be converted are stored **as their original** (still delivered, just not OCR-screenable); video / audio / unconvertible binaries are skipped.
+Files that can't be converted (video, audio, unknown types, broken files) are stored **as their original**, with oomtm's reason as the note: still delivered, just not screenable. A mail's attachments are their own documents in Nova, so a mail's PDF is just the mail.
 
 ## Input (one document)
 
@@ -41,4 +41,4 @@ The PDF (or unconverted original) written into KontAKT's file store; the `/store
 
 ## Dependencies
 
-The shared [`oomtm`](https://github.com/mtm-aarhus/oomtm) library (`nova`, `pdf`). PDF conversion auto-installs LibreOffice on the worker if it's missing (no admin required).
+The shared [`oomtm`](https://github.com/mtm-aarhus/oomtm) library (`nova`, `convert`), pinned to a commit, with the `[pdf]` extra. On the first run, `reset.open_all` makes oomtm install its engines without admin rights, once per machine: LibreOffice (~350 MB) and WeasyPrint's Windows libraries (~30 MB), both from [oomtm_setup](https://github.com/mtm-aarhus/oomtm_setup) first.
